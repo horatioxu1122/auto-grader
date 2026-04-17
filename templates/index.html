@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Autograder{% endblock %}
+
+{% block content %}
+<!-- Claude Code Status -->
+{% if claude_status %}
+    {% if claude_status.ready %}
+    <div class="alert alert-success" style="display: flex; justify-content: space-between; align-items: center;">
+        <span>Claude Code: {{ claude_status.summary }}</span>
+        <a href="/health" class="btn btn-sm" style="background: #fff; color: #2e7d32;">Re-check</a>
+    </div>
+    {% else %}
+    <div class="alert alert-warning" style="display: flex; justify-content: space-between; align-items: center;">
+        <div>
+            <strong>Claude Code not ready</strong> — LLM Review grading (Mode 3) won't work.<br>
+            <span style="font-size: 0.85rem;">{{ claude_status.summary }}</span>
+        </div>
+        <a href="/health" class="btn btn-sm" style="background: #fff; color: #e65100;">Re-check</a>
+    </div>
+    {% endif %}
+{% endif %}
+
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+    <h1 style="margin: 0;">Assignments</h1>
+    <a href="/create" class="btn btn-success">+ Create Assignment</a>
+</div>
+
+{% if assignments %}
+<div class="card">
+    <table>
+        <thead>
+            <tr>
+                <th>Assignment</th>
+                <th>Mode</th>
+                <th>Total Points</th>
+                <th>Submissions</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for a in assignments %}
+            <tr>
+                <td><strong>{{ a.name }}</strong></td>
+                <td>
+                    {% if a.mode == "output_compare" %}
+                        <span class="badge badge-blue">Output Compare</span>
+                    {% elif a.mode == "pytest" %}
+                        <span class="badge badge-orange">Pytest</span>
+                    {% elif a.mode == "llm_review" %}
+                        <span class="badge badge-green">LLM Review</span>
+                    {% endif %}
+                </td>
+                <td>{{ a.total_points }}</td>
+                <td>{{ a.n_submissions }}</td>
+                <td>
+                    {% if a.graded %}
+                        <span class="badge badge-green">Graded</span>
+                    {% else %}
+                        <span class="badge badge-orange">Pending</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <a href="/assignment/{{ a.name }}" class="btn btn-primary btn-sm">View</a>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="card empty-state">
+    <p>No assignments found.</p>
+    <p style="margin-top: 0.5rem; font-size: 0.9rem;">
+        Create an assignment by adding a folder with a <code>config.yaml</code> in the <code>assignments/</code> directory.
+    </p>
+</div>
+{% endif %}
+{% endblock %}

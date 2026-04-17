@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}{{ student_id }} - {{ name }} - Autograder{% endblock %}
+
+{% block content %}
+<p style="margin-bottom: 1rem;">
+    <a href="/assignment/{{ name }}">&larr; Back to {{ name }}</a>
+</p>
+
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+    <h1 style="margin: 0;">{{ student_id }}</h1>
+    {% if grade %}
+    <span class="score" style="font-size: 1.5rem;">
+        {{ grade.total_score }} / {{ grade.max_score }}
+    </span>
+    {% endif %}
+</div>
+
+<!-- Grade Breakdown -->
+{% if grade %}
+<div class="card">
+    <h2>Grade Breakdown</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Criterion</th>
+                <th>Score</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for key, val in grade.items() %}
+                {% if key not in ["student_id", "total_score", "max_score"] %}
+                <tr>
+                    <td>{{ key }}</td>
+                    <td><strong>{{ val }}</strong></td>
+                </tr>
+                {% endif %}
+            {% endfor %}
+            <tr style="border-top: 2px solid #333;">
+                <td><strong>Total</strong></td>
+                <td><span class="score">{{ grade.total_score }} / {{ grade.max_score }}</span></td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<!-- Feedback (Mode 3) -->
+{% if feedback %}
+<div class="card">
+    <h2>Feedback</h2>
+    <pre style="white-space: pre-wrap;">{{ feedback }}</pre>
+</div>
+{% endif %}
+
+<!-- Submitted Files -->
+<div class="card">
+    <h2>Submitted Files ({{ files|length }})</h2>
+    {% for file in files %}
+    <div style="margin-bottom: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 0.8rem; background: #1a1a2e; color: #fff; border-radius: 6px 6px 0 0; font-family: monospace; font-size: 0.85rem;">
+            <span>{{ file.name }}</span>
+            <span style="color: #aaa;">{{ file.language }}</span>
+        </div>
+        <pre style="margin: 0; border-radius: 0 0 6px 6px; max-height: 600px; overflow-y: auto; font-size: 0.85rem; line-height: 1.5; padding: 1rem;">{{ file.content }}</pre>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Actions -->
+<div style="display: flex; gap: 1rem; margin-top: 1rem;">
+    <form action="/grade/{{ name }}" method="post">
+        <input type="hidden" name="student" value="{{ student_id }}">
+        <button type="submit" class="btn btn-primary">Re-grade this student</button>
+    </form>
+</div>
+{% endblock %}

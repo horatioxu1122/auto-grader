@@ -1,0 +1,23 @@
+assignment: "hw2_pytest"
+mode: "pytest"
+total_points: 100
+submission_pattern: "*.py"
+timeout_seconds: 30
+python_command: "python"
+
+test_dir: "tests"
+partial_credit: "proportional"
+
+rubric:
+  - name: "Sorting correctness"
+    points: 60
+    tests:
+      - "test_sort.py::test_ascending"
+      - "test_sort.py::test_descending"
+      - "test_sort.py::test_empty"
+
+  - name: "Edge cases"
+    points: 40
+    tests:
+      - "test_sort.py::test_single_element"
+      - "test_sort.py::test_duplicates"

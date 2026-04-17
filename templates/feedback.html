@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Feedback: {{ student_id }} - Autograder{% endblock %}
+
+{% block content %}
+<p style="margin-bottom: 1rem;">
+    <a href="/assignment/{{ name }}">&larr; Back to {{ name }}</a>
+</p>
+
+<div class="card">
+    <h2>Feedback for {{ student_id }}</h2>
+    <pre>{{ content }}</pre>
+</div>
+{% endblock %}

@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} - Autograder{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 0.5rem;">{{ name }}</h1>
+<p style="margin-bottom: 1.5rem; color: #666;">
+    Mode:
+    {% if config.mode.value == "output_compare" %}
+        <span class="badge badge-blue">Output Compare</span>
+    {% elif config.mode.value == "pytest" %}
+        <span class="badge badge-orange">Pytest</span>
+    {% elif config.mode.value == "llm_review" %}
+        <span class="badge badge-green">LLM Review</span>
+    {% endif %}
+    &nbsp; Total Points: <strong>{{ config.total_points }}</strong>
+    &nbsp;
+    {% if config.language.value == "python" %}
+        <span class="badge badge-blue">Python</span>
+    {% elif config.language.value == "cpp" %}
+        <span class="badge badge-orange">C++</span>
+    {% endif %}
+    &nbsp;
+    {% if config.strictness.value == "strict" %}
+        <span class="badge badge-red">Strict</span>
+    {% elif config.strictness.value == "moderate" %}
+        <span class="badge badge-blue">Moderate</span>
+    {% elif config.strictness.value == "lenient" %}
+        <span class="badge badge-green">Lenient</span>
+    {% endif %}
+</p>
+
+{% if issues %}
+<div class="alert alert-warning">
+    <strong>Config issues:</strong>
+    <ul style="margin-top: 0.5rem; margin-left: 1.2rem;">
+        {% for issue in issues %}
+        <li>{{ issue }}</li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+<!-- Upload Section -->
+<div class="card">
+    <h2>Upload Submissions</h2>
+
+    <!-- Tab buttons -->
+    <div style="display: flex; gap: 0; margin-bottom: 1rem; border-bottom: 2px solid #eee;">
+        <button onclick="showTab('bulk')" id="tab-bulk" class="tab-btn active-tab">Bulk Upload (ZIP)</button>
+        <button onclick="showTab('single')" id="tab-single" class="tab-btn">Single Student</button>
+    </div>
+
+    <!-- Bulk upload -->
+    <div id="panel-bulk">
+        <p style="color: #666; margin-bottom: 1rem;">
+            Upload a ZIP downloaded from your LMS. The autograder auto-detects the format:
+        </p>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.2rem;">
+            <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem;">
+                <strong style="font-size: 0.85rem;">Flat files (most LMS downloads)</strong>
+                <pre style="font-size: 0.75rem; margin: 0.5rem 0 0; padding: 0.5rem; background: #fff;">submissions.zip
+  jdoe_solution.py
+  asmith_solution.py
+  bwong_solution.py</pre>
+                <small style="color: #888;">Student ID is parsed from filename</small>
+            </div>
+            <div style="background: #f8f9fa; border-radius: 6px; padding: 1rem;">
+                <strong style="font-size: 0.85rem;">Folders (multi-file submissions)</strong>
+                <pre style="font-size: 0.75rem; margin: 0.5rem 0 0; padding: 0.5rem; background: #fff;">submissions.zip
+  jdoe/
+    main.py
+    utils.py
+  asmith/
+    main.py</pre>
+                <small style="color: #888;">Folder name = student ID</small>
+            </div>
+        </div>
+
+        <form action="/upload-bulk/{{ name }}" method="post" enctype="multipart/form-data">
+            <div class="form-row">
+                <input type="file" name="zipfile_upload" accept=".zip" required>
+                <select name="zip_format" style="padding: 0.5rem;">
+                    <option value="auto">Auto-detect format</option>
+                    <option value="flat">Flat files (ID_filename.ext)</option>
+                    <option value="folders">Folders (ID/files...)</option>
+                </select>
+            </div>
+            <div class="form-row" style="margin-top: 0.5rem;">
+                <label style="font-size: 0.85rem; color: #666;">Filename separator:</label>
+                <input type="text" name="filename_separator" value="_" style="width: 40px; text-align: center;"
+                       title="Character that separates student ID from filename">
+                <small style="color: #888;">e.g. _ for "jdoe_solution.py"</small>
+                <button type="submit" class="btn btn-primary" style="margin-left: auto;">Upload ZIP</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Single student upload -->
+    <div id="panel-single" style="display: none;">
+        <form action="/upload/{{ name }}" method="post" enctype="multipart/form-data">
+            <div class="form-row">
+                <input type="text" name="student_id" placeholder="Student ID" required>
+                <input type="file" name="files" multiple required>
+                <button type="submit" class="btn btn-primary">Upload</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function showTab(tab) {
+    document.getElementById('panel-bulk').style.display = tab === 'bulk' ? 'block' : 'none';
+    document.getElementById('panel-single').style.display = tab === 'single' ? 'block' : 'none';
+    document.getElementById('tab-bulk').className = 'tab-btn' + (tab === 'bulk' ? ' active-tab' : '');
+    document.getElementById('tab-single').className = 'tab-btn' + (tab === 'single' ? ' active-tab' : '');
+}
+</script>
+
+<style>
+.tab-btn {
+    padding: 0.6rem 1.2rem;
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #888;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+}
+.tab-btn.active-tab {
+    color: #1a1a2e;
+    border-bottom-color: #1a1a2e;
+}
+</style>
+
+<!-- Submissions & Grading -->
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2 style="margin-bottom: 0;">Submissions ({{ submissions|length }})</h2>
+        {% if submissions %}
+        <form action="/grade/{{ name }}" method="post" style="margin: 0;">
+            <button type="submit" class="btn btn-success">Grade All</button>
+        </form>
+        {% endif %}
+    </div>
+
+    {% if submissions %}
+    <table>
+        <thead>
+            <tr>
+                <th>Student ID</th>
+                <th>Files</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for sub in submissions %}
+            <tr>
+                <td><a href="/submission/{{ name }}/{{ sub.student_id }}" style="font-weight: 600; color: #1a1a2e;">{{ sub.student_id }}</a></td>
+                <td>{{ sub.files|length }} file(s)</td>
+                <td>
+                    <a href="/submission/{{ name }}/{{ sub.student_id }}" class="btn btn-sm" style="background: #e3f2fd; color: #1565c0;">View</a>
+                    <form action="/grade/{{ name }}" method="post" style="display:inline;">
+                        <input type="hidden" name="student" value="{{ sub.student_id }}">
+                        <button type="submit" class="btn btn-primary btn-sm">Grade</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="empty-state">No submissions yet.</p>
+    {% endif %}
+</div>
+
+<!-- Grades -->
+{% if grades %}
+<div class="card">
+    <h2>Grades</h2>
+    <table>
+        <thead>
+            <tr>
+                {% for key in grades[0].keys() %}
+                <th>{{ key }}</th>
+                {% endfor %}
+                {% if feedback_files %}
+                <th>Feedback</th>
+                {% endif %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in grades %}
+            <tr>
+                {% for key, val in row.items() %}
+                <td>
+                    {% if key == "student_id" %}
+                        <a href="/submission/{{ name }}/{{ val }}" style="font-weight: 600; color: #1a1a2e;">{{ val }}</a>
+                    {% elif key == "total_score" %}
+                        <span class="score">{{ val }}</span>
+                    {% else %}
+                        {{ val }}
+                    {% endif %}
+                </td>
+                {% endfor %}
+                {% if feedback_files %}
+                <td>
+                    {% if row.get("student_id", "") in feedback_files %}
+                    <a href="/feedback/{{ name }}/{{ row['student_id'] }}" class="btn btn-sm btn-primary">View</a>
+                    {% endif %}
+                </td>
+                {% endif %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% endblock %}

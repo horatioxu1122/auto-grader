@@ -1,0 +1,339 @@
+{% extends "base.html" %}
+{% block title %}Create Assignment - Autograder{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1.5rem;">Create Assignment</h1>
+
+<form action="/create" method="post" enctype="multipart/form-data" id="create-form">
+    <!-- Basic Info -->
+    <div class="card">
+        <h2>Basic Info</h2>
+        <div class="form-group">
+            <label for="name">Assignment Name</label>
+            <input type="text" id="name" name="name" placeholder="e.g. hw4_recursion" required
+                   style="width: 100%; padding: 0.6rem; font-size: 1rem;">
+            <small style="color: #888;">Spaces will be replaced with underscores, lowercased.</small>
+        </div>
+
+        <div class="form-group" style="margin-top: 1rem;">
+            <label for="mode">Grading Mode</label>
+            <select id="mode" name="mode" style="width: 100%; padding: 0.6rem; font-size: 1rem;" onchange="toggleModeFields()">
+                {% for m in modes %}
+                <option value="{{ m.value }}">{{ m.label }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="form-group" style="margin-top: 1rem;">
+            <label for="total_points">Total Points</label>
+            <input type="number" id="total_points" name="total_points" value="100" min="1" step="1" required
+                   style="width: 200px; padding: 0.6rem; font-size: 1rem;">
+        </div>
+
+        <div class="form-group" style="margin-top: 1rem;">
+            <label for="language">Language</label>
+            <select id="language" name="language" style="width: 200px; padding: 0.6rem; font-size: 1rem;" onchange="updateLanguageDefaults()">
+                <option value="python">Python</option>
+                <option value="cpp">C++</option>
+            </select>
+        </div>
+
+        <div class="form-group" style="margin-top: 1rem;">
+            <label for="submission_pattern">Submission File Pattern</label>
+            <input type="text" id="submission_pattern" name="submission_pattern" value="*.py"
+                   style="width: 200px; padding: 0.6rem; font-size: 1rem;">
+            <small style="color: #888;">Glob pattern: *.py, *.ipynb, *.cpp, etc.</small>
+        </div>
+    </div>
+
+    <!-- Grading Strictness -->
+    <div class="card">
+        <h2>Grading Strictness</h2>
+        <p style="color: #666; margin-bottom: 1rem;">Controls how generously the grader awards partial credit.</p>
+        {% for s in strictness_options %}
+        <label style="display: block; padding: 0.8rem; border: 2px solid #eee; border-radius: 8px; margin-bottom: 0.5rem; cursor: pointer;"
+               class="strictness-option">
+            <input type="radio" name="strictness" value="{{ s.value }}"
+                   {{ 'checked' if s.value == 'moderate' else '' }}
+                   style="margin-right: 0.5rem;">
+            <strong>{{ s.label }}</strong>
+        </label>
+        {% endfor %}
+    </div>
+
+    <!-- LLM-specific: Instructions Upload -->
+    <div class="card" id="llm-fields">
+        <h2>Assignment Instructions</h2>
+        <p style="color: #666; margin-bottom: 1rem;">Upload the instructions document that students received. Claude will grade against this.</p>
+        <div class="form-group">
+            <label for="instructions">Instructions File (.md, .txt, .pdf)</label>
+            <input type="file" id="instructions" name="instructions" accept=".md,.txt,.pdf">
+            <small style="color: #888;">Optional — you can add this later by editing the assignment folder.</small>
+        </div>
+    </div>
+
+    <!-- Mode 1: Test Cases (dynamic) -->
+    <div id="test-cases-section" style="display: none;">
+        <div class="card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                <h2 style="margin: 0;">Test Cases</h2>
+                <button type="button" class="btn btn-primary btn-sm" onclick="addTestCase()">+ Add Test Case</button>
+            </div>
+            <div id="test-cases-container"></div>
+            <div id="tc-points-sum" style="margin-top: 0.5rem; font-size: 0.85rem; color: #888;"></div>
+        </div>
+    </div>
+
+    <!-- Mode 2 & 3: Rubric Items (textarea) -->
+    <div id="rubric-section">
+        <div class="card">
+            <h2>Rubric Items</h2>
+            <p style="color: #666; margin-bottom: 0.5rem;">
+                Define grading criteria, one per line. Format: <code>Name: Points</code> or <code>Name: Points - Description</code>
+            </p>
+            <p style="color: #666; margin-bottom: 1rem; font-size: 0.85rem;" id="rubric-hint-llm">
+                For LLM Review mode, these are the specific criteria Claude will evaluate against.
+                The points should add up to the total points above.
+            </p>
+            <p style="color: #666; margin-bottom: 1rem; font-size: 0.85rem; display: none;" id="rubric-hint-other">
+                For Pytest, each item maps to a group of tests.
+                You can configure the details later in <code>config.yaml</code>.
+            </p>
+            <textarea id="rubric_items" name="rubric_items" rows="8"
+                      style="width: 100%; padding: 0.6rem; font-family: monospace; font-size: 0.9rem; border: 1px solid #ddd; border-radius: 4px;"
+                      placeholder="Correct use of recursion: 30 - Must use recursion, not loops
+Code clarity: 20 - Readable, well-structured code
+Output correctness: 30 - Produces correct results
+Explanation quality: 20 - Comments explain the approach"></textarea>
+            <div id="rubric-sum" style="margin-top: 0.5rem; font-size: 0.85rem; color: #888;"></div>
+        </div>
+    </div>
+
+    <!-- Hidden field to carry serialized test cases -->
+    <input type="hidden" id="test_cases_json" name="test_cases_json" value="[]">
+
+    <button type="submit" class="btn btn-success" style="font-size: 1.1rem; padding: 0.8rem 2rem;">
+        Create Assignment
+    </button>
+</form>
+
+<script>
+let testCaseCounter = 0;
+
+function toggleModeFields() {
+    const mode = document.getElementById('mode').value;
+
+    // LLM fields
+    document.getElementById('llm-fields').style.display = mode === 'llm_review' ? 'block' : 'none';
+
+    // Test cases vs rubric
+    document.getElementById('test-cases-section').style.display = mode === 'output_compare' ? 'block' : 'none';
+    document.getElementById('rubric-section').style.display = mode !== 'output_compare' ? 'block' : 'none';
+
+    // Rubric hints
+    document.getElementById('rubric-hint-llm').style.display = mode === 'llm_review' ? 'block' : 'none';
+    document.getElementById('rubric-hint-other').style.display = mode === 'pytest' ? 'block' : 'none';
+}
+toggleModeFields();
+
+function updateLanguageDefaults() {
+    const lang = document.getElementById('language').value;
+    document.getElementById('submission_pattern').value = lang === 'cpp' ? '*.cpp' : '*.py';
+}
+
+function addTestCase() {
+    const idx = testCaseCounter++;
+    const container = document.getElementById('test-cases-container');
+
+    const html = `
+    <div class="tc-card" id="tc-${idx}" style="border: 1px solid #ddd; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; background: #fafafa;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.8rem;">
+            <input type="text" class="tc-name" placeholder="Test case name" value="Test ${idx + 1}"
+                   style="font-weight: 600; font-size: 1rem; border: 1px solid #ddd; padding: 0.4rem 0.6rem; border-radius: 4px; width: 300px;">
+            <button type="button" onclick="removeTestCase(${idx})" style="background: none; border: none; color: #c62828; cursor: pointer; font-size: 1.2rem;">&times;</button>
+        </div>
+
+        <!-- Stdin -->
+        <div class="tc-section">
+            <label>Stdin source</label>
+            <select class="tc-stdin-source" onchange="toggleStdinFields(${idx})">
+                <option value="none">No input</option>
+                <option value="text">Text</option>
+                <option value="file">File upload</option>
+            </select>
+            <div class="tc-stdin-text-field" style="display:none; margin-top: 0.5rem;">
+                <textarea class="tc-stdin-text" rows="3" placeholder="Enter stdin input here..."
+                          style="width:100%; font-family:monospace; font-size:0.85rem; padding:0.4rem; border:1px solid #ddd; border-radius:4px;"></textarea>
+            </div>
+            <div class="tc-stdin-file-field" style="display:none; margin-top: 0.5rem;">
+                <input type="file" class="tc-stdin-file" accept=".txt,.in">
+            </div>
+        </div>
+
+        <!-- Return Code -->
+        <div class="tc-section">
+            <label>Return Code</label>
+            <select class="tc-rc-check" onchange="toggleRcFields(${idx})">
+                <option value="dont_check">Don't check</option>
+                <option value="zero">Zero (success)</option>
+                <option value="nonzero">Nonzero (error expected)</option>
+            </select>
+            <div class="tc-rc-points" style="display:none; margin-top: 0.5rem;">
+                <span>Correct: <input type="number" class="tc-rc-correct" value="0" min="0" step="1" style="width:60px;" onchange="updateTcPointsSum()"> pts</span>
+                <span style="margin-left:1rem;">Wrong: <input type="number" class="tc-rc-wrong" value="0" min="0" step="1" style="width:60px;"> pts</span>
+            </div>
+        </div>
+
+        <!-- Stdout -->
+        <div class="tc-section">
+            <label>Stdout</label>
+            <select class="tc-stdout-check" onchange="toggleStdoutFields(${idx})">
+                <option value="dont_check">Don't check</option>
+                <option value="text">Check against text</option>
+                <option value="file">Check against file</option>
+            </select>
+            <div class="tc-stdout-text-field" style="display:none; margin-top: 0.5rem;">
+                <textarea class="tc-stdout-text" rows="3" placeholder="Expected stdout output..."
+                          style="width:100%; font-family:monospace; font-size:0.85rem; padding:0.4rem; border:1px solid #ddd; border-radius:4px;"></textarea>
+            </div>
+            <div class="tc-stdout-file-field" style="display:none; margin-top: 0.5rem;">
+                <input type="file" class="tc-stdout-file" accept=".txt,.out">
+            </div>
+            <div class="tc-stdout-points" style="display:none; margin-top: 0.5rem;">
+                <span>Correct: <input type="number" class="tc-stdout-correct" value="0" min="0" step="1" style="width:60px;" onchange="updateTcPointsSum()"> pts</span>
+                <span style="margin-left:1rem;">Wrong: <input type="number" class="tc-stdout-wrong" value="0" min="0" step="1" style="width:60px;"> pts</span>
+            </div>
+        </div>
+
+        <!-- Diff Options -->
+        <div class="tc-section">
+            <label>Diff Options</label>
+            <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+                <label style="font-weight: normal;"><input type="checkbox" class="tc-ignore-case"> Ignore case</label>
+                <label style="font-weight: normal;"><input type="checkbox" class="tc-ignore-ws"> Ignore whitespace</label>
+                <label style="font-weight: normal;"><input type="checkbox" class="tc-ignore-ws-changes"> Ignore whitespace changes</label>
+                <label style="font-weight: normal;"><input type="checkbox" class="tc-ignore-blank"> Ignore blank lines</label>
+            </div>
+        </div>
+    </div>`;
+
+    container.insertAdjacentHTML('beforeend', html);
+    updateTcPointsSum();
+}
+
+function removeTestCase(idx) {
+    const el = document.getElementById(`tc-${idx}`);
+    if (el) el.remove();
+    updateTcPointsSum();
+}
+
+function toggleStdinFields(idx) {
+    const card = document.getElementById(`tc-${idx}`);
+    const val = card.querySelector('.tc-stdin-source').value;
+    card.querySelector('.tc-stdin-text-field').style.display = val === 'text' ? 'block' : 'none';
+    card.querySelector('.tc-stdin-file-field').style.display = val === 'file' ? 'block' : 'none';
+}
+
+function toggleRcFields(idx) {
+    const card = document.getElementById(`tc-${idx}`);
+    const val = card.querySelector('.tc-rc-check').value;
+    card.querySelector('.tc-rc-points').style.display = val !== 'dont_check' ? 'block' : 'none';
+    updateTcPointsSum();
+}
+
+function toggleStdoutFields(idx) {
+    const card = document.getElementById(`tc-${idx}`);
+    const val = card.querySelector('.tc-stdout-check').value;
+    card.querySelector('.tc-stdout-text-field').style.display = val === 'text' ? 'block' : 'none';
+    card.querySelector('.tc-stdout-file-field').style.display = val === 'file' ? 'block' : 'none';
+    card.querySelector('.tc-stdout-points').style.display = val !== 'dont_check' ? 'block' : 'none';
+    updateTcPointsSum();
+}
+
+function updateTcPointsSum() {
+    let sum = 0;
+    document.querySelectorAll('.tc-card').forEach(card => {
+        const rcCheck = card.querySelector('.tc-rc-check').value;
+        const stdoutCheck = card.querySelector('.tc-stdout-check').value;
+        if (rcCheck !== 'dont_check') sum += parseFloat(card.querySelector('.tc-rc-correct').value) || 0;
+        if (stdoutCheck !== 'dont_check') sum += parseFloat(card.querySelector('.tc-stdout-correct').value) || 0;
+    });
+
+    const total = parseFloat(document.getElementById('total_points').value) || 0;
+    const el = document.getElementById('tc-points-sum');
+    const count = document.querySelectorAll('.tc-card').length;
+
+    if (count === 0) { el.textContent = ''; return; }
+
+    if (Math.abs(sum - total) < 0.01) {
+        el.innerHTML = `<span style="color: #2e7d32;">${count} test case(s), ${sum} max points — matches total.</span>`;
+    } else {
+        el.innerHTML = `<span style="color: #c62828;">${count} test case(s), ${sum} max points — does not match total (${total}).</span>`;
+    }
+}
+
+document.getElementById('total_points').addEventListener('input', updateTcPointsSum);
+
+// Serialize test cases to JSON before form submit
+document.getElementById('create-form').addEventListener('submit', function() {
+    const cases = [];
+    document.querySelectorAll('.tc-card').forEach(card => {
+        cases.push({
+            name: card.querySelector('.tc-name').value,
+            stdin_source: card.querySelector('.tc-stdin-source').value,
+            stdin_text: card.querySelector('.tc-stdin-text').value,
+            return_code_check: card.querySelector('.tc-rc-check').value,
+            return_code_correct_points: parseFloat(card.querySelector('.tc-rc-correct').value) || 0,
+            return_code_wrong_points: parseFloat(card.querySelector('.tc-rc-wrong').value) || 0,
+            stdout_check: card.querySelector('.tc-stdout-check').value,
+            stdout_text: card.querySelector('.tc-stdout-text').value,
+            stdout_correct_points: parseFloat(card.querySelector('.tc-stdout-correct').value) || 0,
+            stdout_wrong_points: parseFloat(card.querySelector('.tc-stdout-wrong').value) || 0,
+            ignore_case: card.querySelector('.tc-ignore-case').checked,
+            ignore_whitespace: card.querySelector('.tc-ignore-ws').checked,
+            ignore_whitespace_changes: card.querySelector('.tc-ignore-ws-changes').checked,
+            ignore_blank_lines: card.querySelector('.tc-ignore-blank').checked,
+        });
+    });
+    document.getElementById('test_cases_json').value = JSON.stringify(cases);
+});
+
+// Rubric sum for modes 2/3
+document.getElementById('rubric_items').addEventListener('input', updateRubricSum);
+document.getElementById('total_points').addEventListener('input', updateRubricSum);
+
+function updateRubricSum() {
+    const lines = document.getElementById('rubric_items').value.split('\n');
+    const total = parseFloat(document.getElementById('total_points').value) || 0;
+    let sum = 0, count = 0;
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.includes(':')) continue;
+        const rest = trimmed.split(':')[1].trim();
+        const pointsStr = rest.includes('-') ? rest.split('-')[0].trim() : rest.trim();
+        const points = parseFloat(pointsStr);
+        if (!isNaN(points)) { sum += points; count++; }
+    }
+    const el = document.getElementById('rubric-sum');
+    if (count === 0) { el.textContent = ''; return; }
+    if (Math.abs(sum - total) < 0.01) {
+        el.innerHTML = `<span style="color: #2e7d32;">${count} item(s), ${sum} points — matches total.</span>`;
+    } else {
+        el.innerHTML = `<span style="color: #c62828;">${count} item(s), ${sum} points — does not match total (${total}).</span>`;
+    }
+}
+</script>
+
+<style>
+.form-group { margin-bottom: 0.5rem; }
+.form-group label { display: block; font-weight: 600; margin-bottom: 0.3rem; }
+.form-group small { display: block; margin-top: 0.2rem; }
+.strictness-option:has(input:checked) {
+    border-color: #1a1a2e;
+    background: #f8f9fa;
+}
+.tc-section { margin-bottom: 0.8rem; }
+.tc-section > label { display: block; font-weight: 600; font-size: 0.85rem; color: #555; margin-bottom: 0.3rem; }
+.tc-section select { padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px; }
+</style>
+{% endblock %}

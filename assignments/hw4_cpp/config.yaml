@@ -1,0 +1,33 @@
+assignment: "hw4_cpp"
+mode: "output_compare"
+language: "cpp"
+total_points: 100
+submission_pattern: "*.cpp"
+timeout_seconds: 10
+cpp_compiler: "g++"
+cpp_flags: ["-std=c++17", "-O2"]
+strictness: "moderate"
+
+test_cases:
+  - name: "Basic output"
+    stdin_source: "none"
+    return_code_check: "zero"
+    return_code_correct_points: 10
+    return_code_wrong_points: 0
+    stdout_check: "file"
+    stdout_file: "expected_basic.txt"
+    stdout_correct_points: 40
+    stdout_wrong_points: 0
+    ignore_whitespace: true
+
+  - name: "With input"
+    stdin_source: "text"
+    stdin_text: "42\n"
+    return_code_check: "zero"
+    return_code_correct_points: 10
+    return_code_wrong_points: 0
+    stdout_check: "file"
+    stdout_file: "expected_input.txt"
+    stdout_correct_points: 40
+    stdout_wrong_points: 0
+    ignore_whitespace: true

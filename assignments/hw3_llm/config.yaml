@@ -1,0 +1,31 @@
+assignment: "hw3_llm"
+mode: "llm_review"
+total_points: 100
+submission_pattern: "*.py"
+
+instructions_file: "instructions.md"
+rubric_file: "rubric.md"
+model: "sonnet"
+max_tokens: 4096
+
+rubric:
+  - name: "Correct use of recursion"
+    points: 30
+    description: >
+      Student must implement the solution using recursion, not loops.
+      Partial credit for hybrid approaches.
+
+  - name: "Code clarity"
+    points: 20
+    description: >
+      Code is readable, well-structured, uses meaningful variable names.
+
+  - name: "Output correctness"
+    points: 30
+    description: >
+      The program produces correct output for standard inputs.
+
+  - name: "Explanation quality"
+    points: 20
+    description: >
+      Comments or docstrings explain the approach and reasoning.
