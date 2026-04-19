@@ -61,6 +61,8 @@ def check_claude() -> ClaudeStatus:
             text=True,
             timeout=10,
             env=env,
+            encoding="utf-8",
+            errors="replace",
         )
         if proc.returncode == 0:
             status.installed = True
@@ -87,6 +89,8 @@ def check_claude() -> ClaudeStatus:
             ["claude", "auth", "status"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
             env=env,
         )

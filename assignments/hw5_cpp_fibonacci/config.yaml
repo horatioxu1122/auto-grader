@@ -1,0 +1,49 @@
+assignment: "hw5_cpp_fibonacci"
+mode: "llm_review"
+language: "cpp"
+total_points: 100
+submission_pattern: "*.cpp"
+timeout_seconds: 15
+cpp_compiler: "g++"
+cpp_flags: ["-std=c++17", "-O2"]
+strictness: "moderate"
+
+instructions_file: "instructions.md"
+rubric_file: "rubric.md"
+model: "sonnet"
+max_tokens: 4096
+
+rubric:
+  - name: "Correctness"
+    points: 40
+    description: >
+      Program produces the correct Fibonacci sequence: F(0) through F(14),
+      which is: 0 1 1 2 3 5 8 13 21 34 55 89 144 233 377.
+      Output values must all be correct.
+
+  - name: "Algorithmic Efficiency"
+    points: 25
+    description: >
+      Uses an efficient approach. Full credit for memoization, dynamic programming,
+      iterative O(n), or matrix exponentiation. Partial credit for naive recursion
+      that still works for n=14. No credit for brute force that would fail on larger n.
+
+  - name: "Edge Case Handling"
+    points: 15
+    description: >
+      Correctly handles F(0) = 0 and F(1) = 1 as base cases.
+      Should not crash, produce wrong values, or skip these.
+
+  - name: "Code Clarity"
+    points: 15
+    description: >
+      Code is readable with meaningful variable names (not single letters like
+      a, b, c unless contextually appropriate). Logical structure. Reasonable
+      formatting. Comments where the logic is non-obvious.
+
+  - name: "Good Practices"
+    points: 5
+    description: >
+      Proper #include statements, uses appropriate data types (long long for
+      larger Fibonacci if needed, though not strictly required up to F(14)).
+      Returns 0 from main. No magic numbers without explanation.

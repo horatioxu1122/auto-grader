@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -61,9 +62,23 @@ def grade_assignment(
     grader = get_grader(config, str(assignment_dir))
     results: list[GradeResult] = []
 
-    for sub in submissions:
+    total = len(submissions)
+    _log(f"Grading {config.assignment} ({total} submission{'s' if total != 1 else ''}) — mode: {config.mode.value}")
+    overall_start = time.time()
+
+    for i, sub in enumerate(submissions, start=1):
+        start = time.time()
         result = grader.grade(sub)
         results.append(result)
+        elapsed = time.time() - start
+
+        if result.error:
+            _log(f"[{i}/{total}] {sub.student_id} — ERROR ({elapsed:.1f}s): {result.error[:80]}")
+        else:
+            _log(f"[{i}/{total}] {sub.student_id} — {result.total_score:.1f}/{result.max_score:.1f} ({elapsed:.1f}s)")
+
+    total_elapsed = time.time() - overall_start
+    _log(f"Done in {total_elapsed:.1f}s")
 
     # Output
     csv_path = output_dir / config.assignment / "grades.csv"
@@ -76,3 +91,8 @@ def grade_assignment(
             write_feedback(result, feedback_dir)
 
     return results
+
+
+def _log(msg: str) -> None:
+    """Print a progress line to the server's terminal."""
+    print(f"[autograder] {msg}", flush=True)

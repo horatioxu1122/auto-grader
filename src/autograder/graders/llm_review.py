@@ -153,7 +153,6 @@ class LLMReviewGrader(Grader):
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 model=self.config.model,
-                max_tokens=self.config.max_tokens,
             )
         except ClaudeCallError as e:
             return GradeResult(
@@ -290,9 +289,11 @@ def _build_rubric_summary(rubric_items) -> str:
     """Build a text summary of rubric items for the prompt."""
     lines: list[str] = []
     for item in rubric_items:
-        lines.append(f"- {item.name} ({item.points} points)")
+        # Use explicit labels so Claude doesn't confuse the name with the point value
+        lines.append(f'- name: "{item.name}"')
+        lines.append(f"  max_points: {item.points}")
         if item.description:
-            lines.append(f"  {item.description}")
+            lines.append(f"  description: {item.description}")
     return "\n".join(lines)
 
 
@@ -305,7 +306,6 @@ def _call_claude_code(
     system_prompt: str,
     user_prompt: str,
     model: str = "sonnet",
-    max_tokens: int = 4096,
     max_retries: int = 2,
 ) -> str | None:
     """Call Claude Code CLI in --print mode with retry logic.
@@ -332,13 +332,14 @@ def _call_claude_code(
                     "--print",
                     "--model", model,
                     "--system-prompt", system_prompt,
-                    "--max-tokens", str(max_tokens),
                     user_prompt,
                 ],
                 capture_output=True,
                 text=True,
                 timeout=120,
                 env=env,
+                encoding="utf-8",
+                errors="replace",
             )
 
             if proc.returncode == 0 and proc.stdout.strip():
@@ -410,11 +411,16 @@ def _parse_response(
         )
 
     items: list[ItemResult] = []
-    response_items = {item["name"]: item for item in data.get("items", [])}
+    # Build a lookup by normalized name (case-insensitive, strip parenthesized suffixes)
+    response_items: dict[str, dict] = {}
+    for item in data.get("items", []):
+        name = item.get("name", "")
+        response_items[_normalize_name(name)] = item
 
     for rubric_item in rubric_items:
-        if rubric_item.name in response_items:
-            ri = response_items[rubric_item.name]
+        key = _normalize_name(rubric_item.name)
+        if key in response_items:
+            ri = response_items[key]
             awarded = min(float(ri.get("points_awarded", 0)), rubric_item.points)
             awarded = max(awarded, 0)  # no negative scores
             items.append(
@@ -441,6 +447,17 @@ def _parse_response(
         items=items,
         overall_feedback=data.get("overall_feedback", ""),
     )
+
+
+def _normalize_name(name: str) -> str:
+    """Normalize a rubric item name for matching.
+
+    Strips whitespace, lowercases, and removes any parenthesized suffix like
+    '(40 points)' so 'Correctness' and 'Correctness (40 points)' compare equal.
+    """
+    # Remove parenthesized suffix (and everything after)
+    result = re.sub(r"\s*\([^)]*\)\s*$", "", name)
+    return result.strip().lower()
 
 
 def _extract_json(text: str) -> str | None:

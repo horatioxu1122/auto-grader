@@ -26,6 +26,8 @@ def run_student_code(
             text=True,
             timeout=timeout_seconds,
             env=env,
+            encoding="utf-8",
+            errors="replace",
         )
         return SandboxResult(
             stdout=proc.stdout,
@@ -73,6 +75,8 @@ def compile_cpp(
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
+            encoding="utf-8",
+            errors="replace",
         )
         return SandboxResult(
             stdout=proc.stdout,
