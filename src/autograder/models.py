@@ -129,6 +129,11 @@ class AssignmentConfig:
     rubric_file: str = ""
     model: str = "sonnet"
     max_tokens: int = 4096
+    # Optional default stdin to feed when running interactive student
+    # programs under LLM Review mode. Empty string ⇒ generic fallback.
+    # Lets cin/scanf-based programs run to completion instead of hanging
+    # on empty input or hitting uninitialized-variable UB.
+    test_stdin: str = ""
     # Grading strictness (affects LLM grading tone)
     strictness: GradingStrictness = GradingStrictness.MODERATE
 

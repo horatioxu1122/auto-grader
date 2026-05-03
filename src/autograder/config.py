@@ -65,6 +65,7 @@ def load_config(assignment_dir: str | Path) -> AssignmentConfig:
         config.rubric = _parse_rubric(raw.get("rubric", []))
         config.model = raw.get("model", "sonnet")
         config.max_tokens = int(raw.get("max_tokens", 4096))
+        config.test_stdin = raw.get("test_stdin", "") or ""
 
     # Strictness applies to all modes but mainly affects LLM grading
     config.strictness = GradingStrictness(raw.get("strictness", "moderate"))

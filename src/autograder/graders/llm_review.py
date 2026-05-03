@@ -56,7 +56,7 @@ FEEDBACK STYLE (IMPORTANT — students read this):
 - Avoid jargon unless the assignment uses it. Prefer "your loop stops one step too early"
   over "off-by-one error in the loop termination condition".
 - When the student did something well, say so — positive reinforcement helps learning.
-- Keep each item's feedback concise (2-4 sentences is usually enough). Be specific, not verbose.
+- Keep each item's feedback concise: 2-3 short sentences, HARD MAX 400 characters per item's "feedback" field. The overall_feedback field has a HARD MAX of 600 characters. Going over these limits will cause your response to be truncated and the student to receive a 0 — being brief is critical. Be specific, not verbose.
 - End the overall feedback with a brief, encouraging note and 1-2 concrete next steps.
 
 {strictness_instructions}
@@ -74,6 +74,12 @@ You MUST respond with ONLY a JSON object in this exact format (no markdown fence
   "overall_feedback": "<constructive summary for the student>"
 }}
 """
+
+# Default stdin to feed when an assignment doesn't provide its own. Six lines
+# of "1" cover most intro programs that prompt for one or two integers; if a
+# student program reads more, it'll just get EOF after these.
+_DEFAULT_TEST_STDIN = "1\n1\n1\n1\n1\n1\n"
+
 
 STRICTNESS_INSTRUCTIONS = {
     GradingStrictness.STRICT: (
@@ -110,7 +116,15 @@ STRICTNESS_INSTRUCTIONS = {
         "award 0 for correctness items. For approach/methodology/explanation items, "
         "award up to 75% if the student demonstrates understanding of the right approach. "
         "Even code with bugs shows effort — credit the thinking, note what went wrong, "
-        "and suggest how to fix it."
+        "and suggest how to fix it.\n"
+        "- INPUT-HANDLING TOLERANCE (LENIENT only): If the runtime failure looks like it "
+        "was caused by missing or unexpected stdin input (e.g., uninitialized variable used "
+        "after a failed cin/scanf read, infinite cin loop, segmentation fault from unguarded "
+        "recursion or array access on bad input), DO NOT penalize for that failure. Treat "
+        "the program as if it ran with valid input and grade the source-code logic as you "
+        "see it. Robustness against missing input is NOT a learning objective in intro "
+        "assignments unless the rubric explicitly says so. Briefly acknowledge in the "
+        "feedback that input handling could be more defensive, but score on the algorithm."
     ),
 }
 
@@ -228,11 +242,14 @@ class LLMReviewGrader(Grader):
             script = Path(submission.files[0]).resolve()
             command = [self.config.python_command, str(script)]
 
-        # Run with no stdin first
+        # Feed configured test stdin (or a safe default) so interactive
+        # programs run to completion instead of hanging on cin.fail() or
+        # tripping uninitialized-variable UB on EOF.
+        stdin_input = self.config.test_stdin if self.config.test_stdin else _DEFAULT_TEST_STDIN
         result = run_student_code(
             command=command,
             cwd=submission.directory,
-            stdin_input="",
+            stdin_input=stdin_input,
             timeout_seconds=self.config.timeout_seconds,
         )
 
@@ -404,7 +421,6 @@ def _parse_response(
     rubric_items,
 ) -> GradeResult:
     """Parse Claude's JSON response into a GradeResult."""
-    # Try to extract JSON from the response
     json_str = _extract_json(response)
     if json_str is None:
         return GradeResult(
@@ -416,11 +432,25 @@ def _parse_response(
     try:
         data = json.loads(json_str)
     except json.JSONDecodeError:
-        return GradeResult(
-            student_id=student_id,
-            mode=GradingMode.LLM_REVIEW,
-            error=f"Invalid JSON in LLM response.\nExtracted:\n{json_str[:500]}",
-        )
+        # Truncation is the common cause: the LLM hit its output token cap
+        # mid-feedback. Try to recover any complete items from the partial
+        # JSON so the student gets a real grade instead of 0/0.
+        repaired = _repair_truncated_json(json_str)
+        if repaired is not None:
+            try:
+                data = json.loads(repaired)
+            except json.JSONDecodeError:
+                return GradeResult(
+                    student_id=student_id,
+                    mode=GradingMode.LLM_REVIEW,
+                    error=f"Invalid JSON in LLM response (repair failed).\nExtracted:\n{json_str[:500]}",
+                )
+        else:
+            return GradeResult(
+                student_id=student_id,
+                mode=GradingMode.LLM_REVIEW,
+                error=f"Invalid JSON in LLM response.\nExtracted:\n{json_str[:500]}",
+            )
 
     items: list[ItemResult] = []
     # Build a lookup by normalized name (case-insensitive, strip parenthesized suffixes)
@@ -470,6 +500,69 @@ def _normalize_name(name: str) -> str:
     # Remove parenthesized suffix (and everything after)
     result = re.sub(r"\s*\([^)]*\)\s*$", "", name)
     return result.strip().lower()
+
+
+def _repair_truncated_json(s: str) -> str | None:
+    """Best-effort repair of a JSON object that was cut off at the token cap.
+
+    Strategy: walk the string and track brace/bracket/string state. When we
+    reach the end without all brackets closed, drop any partial trailing
+    item, close all open structures, and return the result. The aim is to
+    preserve the items that DID complete. Returns None if the string isn't
+    obviously a partially-written object.
+    """
+    if not s or s.lstrip()[0:1] != "{":
+        return None
+
+    in_string = False
+    escape = False
+    stack: list[str] = []
+    last_safe = -1  # index just past the last completed top-level item
+
+    for i, ch in enumerate(s):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_string:
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch in "{[":
+            stack.append(ch)
+        elif ch in "}]":
+            if not stack:
+                return None
+            stack.pop()
+            # If we just closed an object inside the top-level "items" array,
+            # remember this position as a safe truncation point.
+            if ch == "}" and len(stack) == 2 and stack[-1] == "[":
+                last_safe = i + 1
+        elif ch == "," and len(stack) == 2 and stack[-1] == "[":
+            # comma at top level of items array — also a safe truncation point
+            last_safe = i
+
+    if not stack:
+        return s  # already balanced; caller's loads should have worked
+
+    if last_safe > 0:
+        prefix = s[:last_safe].rstrip().rstrip(",")
+        # Reconstruct: close items array, then close root object.
+        repaired = prefix + "]}"
+        return repaired
+
+    # No completed items recovered — close whatever's open and let the caller
+    # decide whether the resulting empty-items object is useful.
+    closed = list(stack)
+    closing: list[str] = []
+    for ch in reversed(closed):
+        closing.append("}" if ch == "{" else "]")
+    if in_string:
+        return None  # truncated mid-string with no recovered items — unsafe
+    return s + "".join(closing)
 
 
 def _extract_json(text: str) -> str | None:

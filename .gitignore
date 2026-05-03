@@ -10,3 +10,5 @@ build/
 *.exe
 *.out
 *.o
+.DS_Store
+**/.DS_Store

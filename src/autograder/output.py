@@ -13,29 +13,64 @@ def write_csv(
     config: AssignmentConfig,
     output_path: str | Path,
 ) -> None:
-    """Write a CSV grade report."""
+    """Write a CSV grade report.
+
+    Merges with any existing CSV at output_path so that grading a single
+    student (or a subset) preserves previously graded rows. Rows for
+    students in the new results replace existing rows by student_id.
+    """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Collect all rubric item names for columns
-    all_items: list[str] = []
+    new_ids = {r.student_id for r in results}
+
+    existing_rows: list[dict] = []
+    existing_fieldnames: list[str] = []
+    if output_path.exists():
+        try:
+            with open(output_path, "r", newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                existing_fieldnames = list(reader.fieldnames or [])
+                for row in reader:
+                    if row.get("student_id") not in new_ids:
+                        existing_rows.append(row)
+        except Exception:
+            existing_rows = []
+            existing_fieldnames = []
+
+    new_items: list[str] = []
     for result in results:
         for item in result.items:
-            if item.rubric_item not in all_items:
-                all_items.append(item.rubric_item)
+            if item.rubric_item not in new_items:
+                new_items.append(item.rubric_item)
 
-    fieldnames = ["student_id", *all_items, "total_score", "max_score"]
+    item_columns: list[str] = []
+    for col in existing_fieldnames:
+        if col in ("student_id", "total_score", "max_score"):
+            continue
+        item_columns.append(col)
+    for col in new_items:
+        if col not in item_columns:
+            item_columns.append(col)
+
+    fieldnames = ["student_id", *item_columns, "total_score", "max_score"]
+
+    new_rows: list[dict] = []
+    for result in results:
+        row: dict[str, str | float] = {"student_id": result.student_id}
+        for item in result.items:
+            row[item.rubric_item] = item.points_awarded
+        row["total_score"] = result.total_score
+        row["max_score"] = result.max_score
+        new_rows.append(row)
+
+    all_rows = existing_rows + new_rows
+    all_rows.sort(key=lambda r: r.get("student_id", ""))
 
     with open(output_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
-
-        for result in sorted(results, key=lambda r: r.student_id):
-            row: dict[str, str | float] = {"student_id": result.student_id}
-            for item in result.items:
-                row[item.rubric_item] = item.points_awarded
-            row["total_score"] = result.total_score
-            row["max_score"] = result.max_score
+        for row in all_rows:
             writer.writerow(row)
 
 

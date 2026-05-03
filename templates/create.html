@@ -64,13 +64,73 @@
     <!-- LLM-specific: Instructions Upload -->
     <div class="card" id="llm-fields">
         <h2>Assignment Instructions</h2>
-        <p style="color: #666; margin-bottom: 1rem;">Upload the instructions document that students received. Claude will grade against this.</p>
+        <p style="color: #666; margin-bottom: 1rem;">Provide the instructions document that students received. Claude will grade against this.</p>
+
+        <!-- Tab buttons -->
+        <div style="display: flex; gap: 0; margin-bottom: 1rem; border-bottom: 2px solid #eee;">
+            <button type="button" onclick="showInstrTab('type')" id="instr-tab-type" class="tab-btn active-tab">Type / paste</button>
+            <button type="button" onclick="showInstrTab('upload')" id="instr-tab-upload" class="tab-btn">Upload file</button>
+        </div>
+
+        <div id="instr-panel-type">
+            <div class="form-group">
+                <label for="instructions_text">Instructions text</label>
+                <textarea id="instructions_text" name="instructions_text" rows="10"
+                          style="width: 100%; padding: 0.6rem; font-family: monospace; font-size: 0.9rem; border: 1px solid #ddd; border-radius: 4px;"
+                          placeholder="Paste the assignment instructions here. Markdown is supported."></textarea>
+                <small style="color: #888;">Optional — leave blank if uploading a file or adding later.</small>
+            </div>
+        </div>
+
+        <div id="instr-panel-upload" style="display: none;">
+            <div class="form-group">
+                <label for="instructions">Instructions File (.md, .txt, .pdf)</label>
+                <input type="file" id="instructions" name="instructions" accept=".md,.txt,.pdf">
+                <small style="color: #888;">If both a file and text are provided, the file wins.</small>
+            </div>
+        </div>
+
+        <hr style="margin: 1.2rem 0; border: none; border-top: 1px solid #eee;">
+
         <div class="form-group">
-            <label for="instructions">Instructions File (.md, .txt, .pdf)</label>
-            <input type="file" id="instructions" name="instructions" accept=".md,.txt,.pdf">
-            <small style="color: #888;">Optional — you can add this later by editing the assignment folder.</small>
+            <label for="test_stdin">Test input (stdin) — optional</label>
+            <textarea id="test_stdin" name="test_stdin" rows="3"
+                      style="width: 100%; padding: 0.6rem; font-family: monospace; font-size: 0.9rem; border: 1px solid #ddd; border-radius: 4px;"
+                      placeholder="e.g.&#10;5&#10;2"></textarea>
+            <small style="color: #888;">
+                If the assignment expects user input via <code>cin</code> / <code>scanf</code> / <code>input()</code>,
+                paste sample input here so the grader can run student programs to completion.
+                One line per prompt response. Leave blank to use a safe default
+                (<code>1</code> repeated) — that prevents most hangs but the program may still receive unexpected values.
+            </small>
         </div>
     </div>
+
+    <script>
+    function showInstrTab(tab) {
+        document.getElementById('instr-panel-type').style.display = tab === 'type' ? 'block' : 'none';
+        document.getElementById('instr-panel-upload').style.display = tab === 'upload' ? 'block' : 'none';
+        document.getElementById('instr-tab-type').className = 'tab-btn' + (tab === 'type' ? ' active-tab' : '');
+        document.getElementById('instr-tab-upload').className = 'tab-btn' + (tab === 'upload' ? ' active-tab' : '');
+    }
+    </script>
+    <style>
+    .tab-btn {
+        padding: 0.6rem 1.2rem;
+        border: none;
+        background: none;
+        cursor: pointer;
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: #888;
+        border-bottom: 2px solid transparent;
+        margin-bottom: -2px;
+    }
+    .tab-btn.active-tab {
+        color: #1a1a2e;
+        border-bottom-color: #1a1a2e;
+    }
+    </style>
 
     <!-- Mode 1: Test Cases (dynamic) -->
     <div id="test-cases-section" style="display: none;">

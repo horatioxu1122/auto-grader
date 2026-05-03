@@ -40,6 +40,287 @@
 </div>
 {% endif %}
 
+<!-- Grading progress / errors (live-polled) -->
+<div id="grading-status-card" class="card"
+     data-assignment="{{ name }}"
+     style="display: {% if grading_status and grading_status.phase and grading_status.phase != 'idle' %}block{% else %}none{% endif %};">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+        <h2 style="margin: 0;">Grading status</h2>
+        <span id="grading-status-phase" class="badge" style="background: #eef; color: #224;">—</span>
+    </div>
+    <div id="grading-status-message" style="color: #444; margin-bottom: 0.6rem;">—</div>
+    <div style="background: #f0f0f0; border-radius: 6px; height: 10px; overflow: hidden; margin-bottom: 0.4rem;">
+        <div id="grading-progress-bar" style="background: #1a73e8; height: 100%; width: 0%; transition: width 0.3s;"></div>
+    </div>
+    <small id="grading-status-counts" style="color: #666;">0 / 0</small>
+
+    <div id="grading-errors-section" style="display: none; margin-top: 1rem;">
+        <strong style="color: #c62828;">Errors</strong>
+        <table style="margin-top: 0.4rem;">
+            <thead>
+                <tr><th>Student</th><th>Error</th></tr>
+            </thead>
+            <tbody id="grading-errors-tbody"></tbody>
+        </table>
+        <small style="color: #888;">Errored students keep any partial CSV row but are safe to re-grade.</small>
+    </div>
+
+    <div id="grading-fatal-section" style="display: none; margin-top: 1rem;">
+        <div class="alert alert-warning"><strong>Run failed:</strong> <span id="grading-fatal-msg"></span></div>
+    </div>
+</div>
+
+<script>
+(function () {
+    const card = document.getElementById('grading-status-card');
+    if (!card) return;
+    const name = card.dataset.assignment;
+    const phaseEl = document.getElementById('grading-status-phase');
+    const msgEl = document.getElementById('grading-status-message');
+    const barEl = document.getElementById('grading-progress-bar');
+    const countsEl = document.getElementById('grading-status-counts');
+    const errorsSection = document.getElementById('grading-errors-section');
+    const errorsTbody = document.getElementById('grading-errors-tbody');
+    const fatalSection = document.getElementById('grading-fatal-section');
+    const fatalMsg = document.getElementById('grading-fatal-msg');
+
+    let lastPhase = null;
+    let pollHandle = null;
+
+    function escapeHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function render(state) {
+        const phase = state.phase || 'idle';
+        if (phase === 'idle') {
+            card.style.display = 'none';
+            return;
+        }
+        card.style.display = 'block';
+
+        phaseEl.textContent = phase;
+        const phaseColors = {
+            starting: ['#fff8e1', '#8a6d00'],
+            grading: ['#e3f2fd', '#1565c0'],
+            finished: ['#e8f5e9', '#2e7d32'],
+            error: ['#ffebee', '#c62828'],
+        };
+        const [bg, fg] = phaseColors[phase] || ['#eef', '#224'];
+        phaseEl.style.background = bg;
+        phaseEl.style.color = fg;
+
+        const completed = state.completed || 0;
+        const total = state.total || 0;
+        const pct = total > 0 ? Math.round((completed / total) * 100) : (phase === 'finished' ? 100 : 0);
+        barEl.style.width = pct + '%';
+        countsEl.textContent = total > 0
+            ? `${completed} / ${total} (${pct}%)`
+            : (phase === 'starting' ? 'Discovering submissions…' : '—');
+
+        msgEl.textContent = state.last_message || (state.current ? `Grading ${state.current}…` : '—');
+
+        const errs = state.errors || [];
+        if (errs.length > 0) {
+            errorsSection.style.display = 'block';
+            errorsTbody.innerHTML = errs.map(e => `
+                <tr>
+                    <td><strong>${escapeHtml(e.student_id)}</strong></td>
+                    <td style="color: #c62828; font-family: monospace; font-size: 0.85rem; white-space: pre-wrap;">${escapeHtml(e.error)}</td>
+                </tr>
+            `).join('');
+        } else {
+            errorsSection.style.display = 'none';
+            errorsTbody.innerHTML = '';
+        }
+
+        if (state.fatal_error) {
+            fatalSection.style.display = 'block';
+            fatalMsg.textContent = state.fatal_error;
+        } else {
+            fatalSection.style.display = 'none';
+        }
+
+        // When grading just transitioned to a terminal phase, refresh the
+        // page once so the grades table picks up new rows.
+        if (lastPhase && lastPhase !== phase && (phase === 'finished' || phase === 'error')) {
+            stopPolling();
+            setTimeout(() => window.location.reload(), 600);
+        }
+        lastPhase = phase;
+    }
+
+    function poll() {
+        fetch(`/grade-status/${encodeURIComponent(name)}`, { cache: 'no-store' })
+            .then(r => r.json())
+            .then(render)
+            .catch(() => { /* transient — keep polling */ });
+    }
+
+    function startPolling() {
+        if (pollHandle) return;
+        pollHandle = setInterval(poll, 2000);
+    }
+    function stopPolling() {
+        if (pollHandle) { clearInterval(pollHandle); pollHandle = null; }
+    }
+
+    const initial = {{ grading_status | tojson }};
+    if (initial && initial.phase) render(initial);
+    if (initial && (initial.phase === 'starting' || initial.phase === 'grading')) {
+        startPolling();
+    }
+
+    document.querySelectorAll('form[action^="/grade/"]').forEach(form => {
+        form.addEventListener('submit', () => {
+            startPolling();
+        });
+    });
+})();
+</script>
+
+<!-- Rubric (reusable reference) -->
+{% if config.mode.value in ("llm_review", "pytest") and (config.rubric or rubric_md) %}
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+        <h2 style="margin: 0;">Rubric</h2>
+        <small style="color: #888;">Copy these to reuse on another assignment.</small>
+    </div>
+
+    {% if config.rubric %}
+    <table style="margin-bottom: 1rem;">
+        <thead>
+            <tr>
+                <th>Criterion</th>
+                <th style="width: 80px;">Points</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in config.rubric %}
+            <tr>
+                <td><strong>{{ item.name }}</strong></td>
+                <td>{{ item.points }}</td>
+                <td style="color: #444;">{{ item.description or "—" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+
+    <details style="margin-top: 0.5rem;">
+        <summary style="cursor: pointer; font-weight: 600; color: #1a1a2e;">
+            Copy-paste form (Name: Points - Description)
+        </summary>
+        <div style="margin-top: 0.5rem; position: relative;">
+            <textarea id="rubric-copy-paste" readonly rows="{{ (config.rubric|length + 1) if config.rubric else 4 }}"
+                      style="width: 100%; padding: 0.6rem; font-family: monospace; font-size: 0.85rem; border: 1px solid #ddd; border-radius: 4px; background: #fafafa;"
+                      onclick="this.select();">{% for item in config.rubric %}{{ item.name }}: {{ item.points }}{% if item.description %} - {{ item.description }}{% endif %}
+{% endfor %}</textarea>
+            <button type="button" class="btn btn-sm" onclick="copyToClipboard('rubric-copy-paste', this)"
+                    style="position: absolute; top: 6px; right: 6px; background: #e3f2fd; color: #1565c0;">Copy</button>
+        </div>
+    </details>
+
+    {% if rubric_md %}
+    <details style="margin-top: 0.5rem;">
+        <summary style="cursor: pointer; font-weight: 600; color: #1a1a2e;">
+            Raw rubric.md
+        </summary>
+        <div style="margin-top: 0.5rem; position: relative;">
+            <textarea id="rubric-md-raw" readonly rows="10"
+                      style="width: 100%; padding: 0.6rem; font-family: monospace; font-size: 0.85rem; border: 1px solid #ddd; border-radius: 4px; background: #fafafa;"
+                      onclick="this.select();">{{ rubric_md }}</textarea>
+            <button type="button" class="btn btn-sm" onclick="copyToClipboard('rubric-md-raw', this)"
+                    style="position: absolute; top: 6px; right: 6px; background: #e3f2fd; color: #1565c0;">Copy</button>
+        </div>
+    </details>
+    {% endif %}
+</div>
+{% endif %}
+
+{% if config.mode.value == "llm_review" and instructions_md %}
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+        <h2 style="margin: 0;">Instructions</h2>
+        <small style="color: #888;">Reusable across assignments.</small>
+    </div>
+    <div style="position: relative;">
+        <textarea id="instructions-raw" readonly rows="8"
+                  style="width: 100%; padding: 0.6rem; font-family: monospace; font-size: 0.85rem; border: 1px solid #ddd; border-radius: 4px; background: #fafafa;"
+                  onclick="this.select();">{{ instructions_md }}</textarea>
+        <button type="button" class="btn btn-sm" onclick="copyToClipboard('instructions-raw', this)"
+                style="position: absolute; top: 6px; right: 6px; background: #e3f2fd; color: #1565c0;">Copy</button>
+    </div>
+</div>
+{% endif %}
+
+{% if config.mode.value == "llm_review" %}
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+        <h2 style="margin: 0;">Test input (stdin)</h2>
+        <small style="color: #888;">Fed to student programs at run time.</small>
+    </div>
+    {% if config.test_stdin %}
+    <div style="position: relative;">
+        <textarea id="test-stdin-raw" readonly rows="4"
+                  style="width: 100%; padding: 0.6rem; font-family: monospace; font-size: 0.85rem; border: 1px solid #ddd; border-radius: 4px; background: #fafafa;"
+                  onclick="this.select();">{{ config.test_stdin }}</textarea>
+        <button type="button" class="btn btn-sm" onclick="copyToClipboard('test-stdin-raw', this)"
+                style="position: absolute; top: 6px; right: 6px; background: #e3f2fd; color: #1565c0;">Copy</button>
+    </div>
+    {% else %}
+    <p style="color: #666; margin: 0;">No custom stdin configured — the grader feeds a safe default (<code>1</code> repeated) so interactive programs don't hang. To set custom input, edit <code>config.yaml</code> and add a <code>test_stdin: |</code> block, or recreate the assignment.</p>
+    {% endif %}
+</div>
+{% endif %}
+
+{% if config.mode.value == "output_compare" and config.test_cases %}
+<div class="card">
+    <h2 style="margin-top: 0;">Test Cases</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Stdin</th>
+                <th>Return Code</th>
+                <th>Stdout</th>
+                <th style="width: 80px;">Max pts</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for tc in config.test_cases %}
+            <tr>
+                <td><strong>{{ tc.name }}</strong></td>
+                <td>{{ tc.stdin_source.value }}</td>
+                <td>{{ tc.return_code_check.value }} ({{ tc.return_code_correct_points }}/{{ tc.return_code_wrong_points }})</td>
+                <td>{{ tc.stdout_check.value }} ({{ tc.stdout_correct_points }}/{{ tc.stdout_wrong_points }})</td>
+                <td>{{ tc.max_points }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<script>
+function copyToClipboard(elId, btn) {
+    const el = document.getElementById(elId);
+    el.select();
+    try {
+        document.execCommand('copy');
+        const orig = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = orig; }, 1200);
+    } catch (e) {
+        // ignore
+    }
+    window.getSelection().removeAllRanges();
+}
+</script>
+
 <!-- Upload Section -->
 <div class="card">
     <h2>Upload Submissions</h2>

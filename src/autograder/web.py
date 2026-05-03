@@ -6,6 +6,8 @@ import csv
 import json
 import shutil
 import tempfile
+import threading
+import time
 import zipfile
 from pathlib import Path
 from typing import Optional
@@ -43,7 +45,7 @@ _claude_status: ClaudeStatus | None = None
 
 @app.on_event("startup")
 async def startup_check():
-    """Check Claude Code availability on server start."""
+    """Check Claude Code availability and recover stale grading state."""
     import asyncio
 
     global _claude_status
@@ -56,6 +58,30 @@ async def startup_check():
     else:
         print(f"[autograder] WARNING: {_claude_status.summary}")
         print(f"[autograder] Mode 3 (LLM Review) will not work until this is resolved.")
+
+    # Recover any status.json that says "grading" / "starting" — those runs
+    # cannot be alive after a fresh server start. Mark them as errored so
+    # the UI doesn't display a phantom in-flight state forever.
+    if RESULTS_DIR.exists():
+        for status_path in RESULTS_DIR.glob("*/status.json"):
+            try:
+                state = json.loads(status_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if state.get("phase") in ("starting", "grading"):
+                state["phase"] = "error"
+                state["finished_at"] = time.time()
+                state["current"] = None
+                state["fatal_error"] = (
+                    "Server restarted while grading was in flight; the run was abandoned. "
+                    "Re-grade the affected students."
+                )
+                state["last_message"] = "Aborted on restart."
+                try:
+                    status_path.write_text(json.dumps(state), encoding="utf-8")
+                    print(f"[autograder] Cleared stale grading state for {status_path.parent.name}")
+                except Exception:
+                    pass
 
 
 @app.get("/health")
@@ -141,6 +167,17 @@ async def assignment_detail(request: Request, name: str):
         for fb in feedback_dir.glob("*.md"):
             feedback_files[fb.stem] = fb.read_text(encoding="utf-8")
 
+    # Raw rubric / instructions (for copy-paste reuse across assignments)
+    rubric_md: str | None = None
+    rubric_md_path = assignment_dir / "rubric.md"
+    if rubric_md_path.exists():
+        rubric_md = rubric_md_path.read_text(encoding="utf-8")
+
+    instructions_md: str | None = None
+    instructions_path = assignment_dir / "instructions.md"
+    if instructions_path.exists():
+        instructions_md = instructions_path.read_text(encoding="utf-8")
+
     return templates.TemplateResponse(request, "assignment.html", {
         "name": name,
         "config": config,
@@ -148,26 +185,147 @@ async def assignment_detail(request: Request, name: str):
         "submissions": submissions,
         "grades": grades,
         "feedback_files": feedback_files,
+        "rubric_md": rubric_md,
+        "instructions_md": instructions_md,
+        "grading_status": _load_grading_state(name),
     })
+
+
+# --- Grading: background runs, live progress, error visibility ---
+
+_grading_state: dict[str, dict] = {}
+_grading_lock = threading.Lock()
+
+
+def _status_path(name: str) -> Path:
+    return RESULTS_DIR / name / "status.json"
+
+
+def _set_grading_state(name: str, patch: dict, *, append_error: dict | None = None) -> None:
+    """Merge ``patch`` into the in-memory state for ``name`` and persist it.
+
+    ``append_error`` is appended to the ``errors`` list rather than overwriting it.
+    """
+    with _grading_lock:
+        cur = _grading_state.get(name, {}) | {"errors": list(_grading_state.get(name, {}).get("errors", []))}
+        cur.update(patch)
+        if append_error is not None:
+            cur["errors"] = [*cur.get("errors", []), append_error]
+        _grading_state[name] = cur
+        snapshot = dict(cur)
+
+    try:
+        path = _status_path(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(snapshot), encoding="utf-8")
+    except Exception:
+        # Status persistence is best-effort; never let it kill grading.
+        pass
+
+
+def _load_grading_state(name: str) -> dict:
+    with _grading_lock:
+        if name in _grading_state:
+            return dict(_grading_state[name])
+
+    path = _status_path(name)
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {"phase": "idle"}
+    return {"phase": "idle"}
 
 
 @app.post("/grade/{name}")
 async def run_grading(name: str, student: str | None = Form(default=None)):
-    """Trigger grading for an assignment."""
+    """Trigger grading for an assignment in the background.
+
+    The HTTP request returns immediately; the actual grading runs in a
+    daemon thread. Progress and per-student errors are written to
+    ``results/<name>/status.json`` and surfaced via /grade-status/{name}.
+    """
     assignment_dir = ASSIGNMENTS_DIR / name
     sub_dir = SUBMISSIONS_DIR / name
 
-    try:
-        grade_assignment(
-            assignment_dir=assignment_dir,
-            submissions_dir=sub_dir,
-            output_dir=RESULTS_DIR,
-            student_id=student if student else None,
-        )
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+    # Don't kick off a second run if one is already in flight for this assignment.
+    current = _load_grading_state(name)
+    if current.get("phase") in ("starting", "grading"):
+        return RedirectResponse(f"/assignment/{name}", status_code=303)
+
+    started_at = time.time()
+    _set_grading_state(name, {
+        "phase": "starting",
+        "started_at": started_at,
+        "finished_at": None,
+        "current": None,
+        "completed": 0,
+        "total": 0,
+        "errors": [],
+        "last_message": "Starting…",
+        "single_student": student or None,
+    })
+
+    student_id = student if student else None
+
+    def progress_cb(event: dict) -> None:
+        patch: dict = {
+            "phase": event.get("phase", "grading"),
+            "current": event.get("current"),
+            "completed": event.get("completed", 0),
+            "total": event.get("total", 0),
+        }
+        last = event.get("last_result")
+        append_err = None
+        if last:
+            patch["last_message"] = (
+                f"{last['student_id']} — {last['score']:.1f}/{last['max']:.1f}"
+                if not last.get("error")
+                else f"{last['student_id']} — ERROR"
+            )
+            if last.get("error"):
+                append_err = {
+                    "student_id": last["student_id"],
+                    "error": last["error"],
+                    "elapsed_seconds": last.get("elapsed_seconds"),
+                }
+        elif event.get("phase") == "grading" and event.get("current"):
+            patch["last_message"] = f"Grading {event['current']}…"
+        _set_grading_state(name, patch, append_error=append_err)
+
+    def run() -> None:
+        try:
+            grade_assignment(
+                assignment_dir=assignment_dir,
+                submissions_dir=sub_dir,
+                output_dir=RESULTS_DIR,
+                student_id=student_id,
+                progress_callback=progress_cb,
+            )
+            _set_grading_state(name, {
+                "phase": "finished",
+                "finished_at": time.time(),
+                "current": None,
+                "last_message": "Done.",
+            })
+        except Exception as e:
+            _set_grading_state(name, {
+                "phase": "error",
+                "finished_at": time.time(),
+                "current": None,
+                "fatal_error": str(e),
+                "last_message": f"Failed: {str(e)[:160]}",
+            })
+
+    threading.Thread(target=run, daemon=True).start()
 
     return RedirectResponse(f"/assignment/{name}", status_code=303)
+
+
+@app.get("/grade-status/{name}")
+async def grade_status(name: str):
+    """Return current/last grading state for an assignment as JSON."""
+    return JSONResponse(_load_grading_state(name))
 
 
 @app.post("/upload/{name}")
@@ -365,6 +523,8 @@ async def create_assignment(
     strictness: str = Form(default="moderate"),
     submission_pattern: str = Form(default="*.py"),
     instructions: Optional[UploadFile] = File(default=None),
+    instructions_text: str = Form(default=""),
+    test_stdin: str = Form(default=""),
     rubric_items: str = Form(default=""),
     test_cases_json: str = Form(default="[]"),
 ):
@@ -412,11 +572,18 @@ async def create_assignment(
         config["model"] = "sonnet"
         config["max_tokens"] = 4096
         config["rubric"] = rubric_list
+        if test_stdin.strip():
+            config["test_stdin"] = test_stdin
 
-        # Save instructions file
+        # Save instructions: file upload wins; otherwise use typed text;
+        # otherwise write a placeholder for the TA to fill in later.
         if instructions and instructions.filename:
             instr_content = await instructions.read()
             (assignment_dir / "instructions.md").write_bytes(instr_content)
+        elif instructions_text.strip():
+            (assignment_dir / "instructions.md").write_text(
+                instructions_text, encoding="utf-8"
+            )
         else:
             (assignment_dir / "instructions.md").write_text(
                 f"# {safe_name}\n\n[Add assignment instructions here]\n",
