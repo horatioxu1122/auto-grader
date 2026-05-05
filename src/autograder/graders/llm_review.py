@@ -139,9 +139,19 @@ class LLMReviewGrader(Grader):
     def grade(self, submission: StudentSubmission) -> GradeResult:
         assignment_dir = Path(self.assignment_dir)
 
-        # Read instructions
+        # Read instructions (defensive: never crash grading on a corrupt or
+        # binary instructions file — e.g., an old PDF upload that wasn't
+        # text-extracted).
         instructions_path = assignment_dir / self.config.instructions_file
-        instructions = instructions_path.read_text(encoding="utf-8") if instructions_path.exists() else ""
+        instructions = ""
+        if instructions_path.exists():
+            try:
+                instructions = instructions_path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                instructions = (
+                    "[Instructions file could not be decoded as UTF-8. "
+                    "Grade based on the source code below and the rubric.]"
+                )
 
         # Read rubric file
         rubric_path = assignment_dir / self.config.rubric_file
@@ -360,6 +370,11 @@ def _call_claude_code(
                     "claude",
                     "--print",
                     "--model", model,
+                    # Allow Claude to inline @/abs/path/to/img.png references
+                    # in the prompt (used to attach instruction-page images
+                    # for PDF assignments) without prompting interactively.
+                    "--allowed-tools", "Read",
+                    "--permission-mode", "acceptEdits",
                     "--system-prompt", system_prompt,
                     user_prompt,
                 ],

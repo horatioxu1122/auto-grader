@@ -176,7 +176,16 @@ async def assignment_detail(request: Request, name: str):
     instructions_md: str | None = None
     instructions_path = assignment_dir / "instructions.md"
     if instructions_path.exists():
-        instructions_md = instructions_path.read_text(encoding="utf-8")
+        try:
+            instructions_md = instructions_path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            # Non-text content was saved here (e.g., a PDF was uploaded by an
+            # older version of the create handler that wrote raw bytes).
+            # Don't 500 the page.
+            instructions_md = (
+                "*[instructions.md is not valid UTF-8 — likely a binary file "
+                "saved by an older upload. Re-create the assignment to fix.]*"
+            )
 
     return templates.TemplateResponse(request, "assignment.html", {
         "name": name,
@@ -494,6 +503,136 @@ def _extract_flat_zip(
         (dest / submission_filename).write_bytes(zf.read(m.filename))
 
 
+# --- Instructions extraction ---
+
+
+def _render_pdf_pages(data: bytes, out_dir: Path, dpi: int = 150) -> list[Path]:
+    """Render each page of a PDF to a PNG file.
+
+    Files are written as ``out_dir / instructions_page_<N>.png``.
+    Returns the list of written image paths in page order. Existing
+    page PNGs in ``out_dir`` are removed first so re-uploads start clean.
+    """
+    import io
+
+    import pypdfium2 as pdfium
+
+    # Clean up any prior renders so a re-upload doesn't leave stale pages.
+    for old in out_dir.glob("instructions_page_*.png"):
+        try:
+            old.unlink()
+        except OSError:
+            pass
+
+    paths: list[Path] = []
+    pdf = pdfium.PdfDocument(io.BytesIO(data))
+    try:
+        for i in range(len(pdf)):
+            page = pdf[i]
+            try:
+                pil_img = page.render(scale=dpi / 72).to_pil()
+            finally:
+                page.close()
+            out_path = out_dir / f"instructions_page_{i + 1}.png"
+            pil_img.save(out_path, "PNG", optimize=True)
+            paths.append(out_path)
+    finally:
+        pdf.close()
+
+    return paths
+
+
+def _extract_instructions_text(
+    filename: str,
+    data: bytes,
+    fallback_title: str,
+    assignment_dir: Path,
+) -> str:
+    """Convert an uploaded instructions file to markdown text.
+
+    Behavior:
+      * **PDF** (by .pdf extension or %PDF magic): render each page to PNG
+        in ``assignment_dir`` AND extract text via pypdf. The returned
+        markdown embeds ``@/abs/path/to/instructions_page_N.png`` references
+        (Claude CLI inlines these as image attachments) plus the extracted
+        text as a textual transcript.
+      * **Plain text / markdown**: decoded as UTF-8 (lossy on bad bytes).
+      * **Unknown binary**: write a clear placeholder so downstream UTF-8
+        reads in the assignment view and LLM grader stay valid.
+    """
+    name_lower = (filename or "").lower()
+    is_pdf = name_lower.endswith(".pdf") or data[:5] == b"%PDF-"
+
+    if is_pdf:
+        # Render pages to PNGs first; if rendering fails, fall back to text-only.
+        page_paths: list[Path] = []
+        render_error: str | None = None
+        try:
+            page_paths = _render_pdf_pages(data, assignment_dir)
+        except Exception as e:
+            render_error = str(e)
+
+        # Always also extract text — gives Claude an accurate transcript for
+        # quoting and is a usable fallback for the assignment-page preview.
+        text_pages: list[str] = []
+        try:
+            import io as _io
+
+            from pypdf import PdfReader
+
+            reader = PdfReader(_io.BytesIO(data))
+            for i, page in enumerate(reader.pages, start=1):
+                try:
+                    text = (page.extract_text() or "").strip()
+                except Exception:
+                    text = ""
+                if text:
+                    text_pages.append(f"### Page {i} (text)\n\n{text}")
+        except Exception:
+            pass
+
+        parts: list[str] = [f"# {fallback_title}\n"]
+        if page_paths:
+            parts.append(
+                f"*Extracted from `{filename}` "
+                f"({len(page_paths)} page(s) rendered as images).*\n"
+            )
+            parts.append("## Page images\n")
+            for p in page_paths:
+                # Absolute path — Claude CLI's `@` syntax needs a path it can
+                # locate from its own working directory.
+                parts.append(f"@{p.resolve()}")
+            parts.append("")
+        elif render_error:
+            parts.append(
+                f"*PDF page rendering failed for `{filename}`: {render_error}. "
+                f"Falling back to text-only extraction.*\n"
+            )
+        if text_pages:
+            parts.append("## Text transcript\n")
+            parts.extend(text_pages)
+        if not page_paths and not text_pages:
+            parts.append(
+                f"*Could not render or extract text from `{filename}` "
+                f"(likely encrypted or malformed). Paste the instructions "
+                f"into this file manually.*\n"
+            )
+        return "\n".join(parts) + "\n"
+
+    # Plain text / markdown: decode lossily so we never crash later readers.
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            return data.decode("utf-8", errors="replace")
+        except Exception:
+            return (
+                f"# {fallback_title}\n\n"
+                f"*Could not decode `{filename}` as UTF-8 text. "
+                f"Re-upload as plain text, markdown, or PDF.*\n"
+            )
+
+
 # --- Create Assignment ---
 
 
@@ -578,8 +717,13 @@ async def create_assignment(
         # Save instructions: file upload wins; otherwise use typed text;
         # otherwise write a placeholder for the TA to fill in later.
         if instructions and instructions.filename:
-            instr_content = await instructions.read()
-            (assignment_dir / "instructions.md").write_bytes(instr_content)
+            instr_bytes = await instructions.read()
+            instr_text = _extract_instructions_text(
+                instructions.filename, instr_bytes, safe_name, assignment_dir
+            )
+            (assignment_dir / "instructions.md").write_text(
+                instr_text, encoding="utf-8"
+            )
         elif instructions_text.strip():
             (assignment_dir / "instructions.md").write_text(
                 instructions_text, encoding="utf-8"

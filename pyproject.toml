@@ -15,6 +15,9 @@ dependencies = [
     "uvicorn[standard]",
     "jinja2",
     "python-multipart",
+    "pypdf>=4.0",
+    "pypdfium2>=4.0",
+    "pillow>=10.0",
 ]
 
 [project.scripts]
